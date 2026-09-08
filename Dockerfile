@@ -1,4 +1,4 @@
-FROM        --platform=$TARGETOS/$TARGETARCH debian:bullseye-slim
+FROM        --platform=$TARGETOS/$TARGETARCH debian:bookworm-slim
 
 LABEL       author="David Wolfe (Red-Thirten)" maintainer="red_thirten@yahoo.com"
 LABEL       description="Arma 3 dedicated server - Age of Clones fork (Strike Launcher workshop.json mod list)"
@@ -7,10 +7,8 @@ LABEL       org.opencontainers.image.source="https://github.com/ltsammy/arma3egg
 LABEL       org.opencontainers.image.licenses=MIT
 
 ## Update base packages and install dependencies
-## (Bullseye is past its security support window, so its expired Release files have to be accepted)
 ENV         DEBIAN_FRONTEND=noninteractive
-RUN         echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until \
-            && dpkg --add-architecture i386 \
+RUN         dpkg --add-architecture i386 \
             && apt-get update \
             && apt-get upgrade -y \
             && apt-get install -y \
@@ -22,6 +20,7 @@ RUN         echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99n
                 gettext-base \
                 ca-certificates \
                 numactl \
+                libavahi-client3 \
                 libssl-dev \
                 lib32gcc-s1 \
                 libsdl2-2.0-0 \
@@ -31,8 +30,8 @@ RUN         echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99n
                 lib32stdc++6 \
                 libnss-wrapper \
                 libnss-wrapper:i386 \
-                libtbb2 \
-                libtbb2:i386 \
+                libtbbmalloc2 \
+                libtbbmalloc2:i386 \
                 tini
 
 ## Configure locale
