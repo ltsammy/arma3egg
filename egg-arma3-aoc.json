@@ -162,6 +162,16 @@
             "field_type": "text"
         },
         {
+            "name": "[Advanced] Verbose SteamCMD Mod Output",
+            "description": "Prints SteamCMD's full output for every single Steam Workshop mod download. Off by default, because SteamCMD repeats its whole login banner for each mod, which buries the actual update log. Errors always print the output regardless of this setting, and the game server update always stays visible. (1 Enable | 0 Disable)",
+            "env_variable": "STEAMCMD_VERBOSE",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "boolean",
+            "field_type": "text"
+        },
+        {
             "name": "[Legacy] Modlist File (Exported from A3 Launcher)",
             "description": "Optional: filename of a modlist exported from the Arma 3 Launcher. Its mods are added on top of the mods from the Workshop Mod List JSON URL. Upload your HTML file to the root directory (eg. /home/container/modlist.html). Leave blank (recommended) to only use the JSON mod list.",
             "env_variable": "MOD_FILE",

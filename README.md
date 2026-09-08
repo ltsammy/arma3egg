@@ -43,6 +43,7 @@ Only `id` is required; `name` is used purely for nicer log output, and any other
 | `MOD_JSON_URL` | `https://ageofclones.de/strikelauncher/workshop.json` | URL of the mod list. Empty = disabled |
 | `MOD_JSON_FILE` | `workshop.json` | File name the list is saved to in the server root. Serves as a fallback if the URL is unreachable, and can be uploaded manually if no URL is set |
 | `MOD_JSON_PRUNE` | `0` | `1` = delete downloaded Workshop mods (and their `.bikey` files) that are no longer in the list |
+| `STEAMCMD_VERBOSE` | `0` | `1` = print SteamCMD's full output for every mod download |
 
 `MOD_FILE` (`modlist.html`) still exists and now defaults to empty. If it is set, its mods are added
 on top of the ones from the JSON list, so both sources can be combined.
@@ -59,6 +60,12 @@ on top of the ones from the JSON list, so both sources can be combined.
   failed download can never wipe the installed mods.
 * **Mod names** come from the JSON, so the update log shows readable names without an extra request
   to the Steam Workshop page.
+* **Quiet mod downloads:** SteamCMD repeats its entire login banner for every mod, which buries the
+  update log when dozens of mods are being updated. Its output is therefore written to
+  `steamcmd/steamcmd.log` only, and each mod is summarised in a few lines. On an error — and on
+  every unexpected SteamCMD exit code — the last 25 lines of that log are printed automatically, and
+  `STEAMCMD_VERBOSE=1` brings the full output back. The game server update always stays visible, so
+  its download progress can be followed.
 
 ## Docker image
 

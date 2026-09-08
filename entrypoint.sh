@@ -24,13 +24,21 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 ## === ENVIRONMENT VARS ===
-# STARTUP, STARTUP_PARAMS, STEAM_USER, STEAM_PASS, SERVER_BINARY, MOD_JSON_URL, MOD_JSON_FILE, MOD_JSON_PRUNE, MOD_FILE, MODIFICATIONS, SERVERMODS, OPTIONALMODS, UPDATE_SERVER, CLEAR_CACHE, VALIDATE_SERVER, MODS_LOWERCASE, STEAMCMD_EXTRA_FLAGS, CDLC, STEAMCMD_APPID, HC_NUM, SERVER_PASSWORD, HC_HIDE, STEAMCMD_ATTEMPTS, BASIC_URL, DISABLE_MOD_UPDATES
+# STARTUP, STARTUP_PARAMS, STEAM_USER, STEAM_PASS, SERVER_BINARY, MOD_JSON_URL, MOD_JSON_FILE, MOD_JSON_PRUNE, MOD_FILE, MODIFICATIONS, SERVERMODS, OPTIONALMODS, UPDATE_SERVER, CLEAR_CACHE, VALIDATE_SERVER, MODS_LOWERCASE, STEAMCMD_EXTRA_FLAGS, CDLC, STEAMCMD_APPID, HC_NUM, SERVER_PASSWORD, HC_HIDE, STEAMCMD_ATTEMPTS, BASIC_URL, DISABLE_MOD_UPDATES, STEAMCMD_VERBOSE
 
 ## === GLOBAL VARS ===
-# validateServer, extraFlags, updateAttempt, modifiedStartup, allMods, CLIENT_MODS, jsonMods, modNames
+# validateServer, extraFlags, updateAttempt, modifiedStartup, allMods, CLIENT_MODS, jsonMods, modNames, steamcmdArgs, steamcmdOutputHidden
 
 ## === DEFINE FUNCTIONS ===
 #
+# Prints the tail of the SteamCMD log, but only if SteamCMD's output was hidden from the console
+function PrintSteamCMDLog { #[No input]
+    if [[ ${steamcmdOutputHidden} == 1 ]] && [[ -s "${STEAMCMD_LOG}" ]]; then
+        echo -e "${YELLOW}Last 25 lines of SteamCMD's hidden output:${NC}"
+        tail -n 25 "${STEAMCMD_LOG}"
+    fi
+}
+
 # Runs SteamCMD with specified variables and performs error handling.
 function RunSteamCMD { #[Input: int server=0 mod=1 optional_mod=2; int id]
     # Clear previous SteamCMD log
@@ -50,13 +58,25 @@ function RunSteamCMD { #[Input: int server=0 mod=1 optional_mod=2; int id]
 
         # Check if updating server or mod
         if [[ $1 == 0 ]]; then # Server
-            numactl --physcpubind=+0 ${STEAMCMD_DIR}/steamcmd.sh +force_install_dir /home/container "+login \"${STEAM_USER}\" \"${STEAM_PASS}\"" +app_update $2 $extraFlags $validateServer +quit | tee -a "${STEAMCMD_LOG}"
+            steamcmdArgs=(+force_install_dir /home/container "+login \"${STEAM_USER}\" \"${STEAM_PASS}\"" +app_update $2 $extraFlags $validateServer +quit)
         else # Mod
-            numactl --physcpubind=+0 ${STEAMCMD_DIR}/steamcmd.sh "+login \"${STEAM_USER}\" \"${STEAM_PASS}\"" +workshop_download_item $GAME_ID $2 +quit | tee -a "${STEAMCMD_LOG}"
+            steamcmdArgs=("+login \"${STEAM_USER}\" \"${STEAM_PASS}\"" +workshop_download_item $GAME_ID $2 +quit)
+        fi
+
+        # Mod downloads are logged quietly by default, because SteamCMD repeats its whole login
+        # banner for every single mod. The server update always keeps its output, so its download
+        # progress stays visible.
+        if [[ $1 == 0 ]] || [[ ${STEAMCMD_VERBOSE} == "1" ]]; then
+            steamcmdOutputHidden=0
+            numactl --physcpubind=+0 ${STEAMCMD_DIR}/steamcmd.sh "${steamcmdArgs[@]}" | tee -a "${STEAMCMD_LOG}"
+            steamcmdExitCode=${PIPESTATUS[0]}
+        else
+            steamcmdOutputHidden=1
+            numactl --physcpubind=+0 ${STEAMCMD_DIR}/steamcmd.sh "${steamcmdArgs[@]}" >> "${STEAMCMD_LOG}" 2>&1
+            steamcmdExitCode=$?
         fi
 
         # Error checking for SteamCMD
-        steamcmdExitCode=${PIPESTATUS[0]}
         # Catch errors (ignore setlocale, SDL, steamservice, thread priority, and libcurl warnings)
         loggedErrors=$(grep -i "error\|failed" "${STEAMCMD_LOG}" | grep -iv "setlocal\|SDL\|steamservice\|thread\|libcurl")
         if [[ -n ${loggedErrors} ]]; then
@@ -99,11 +119,13 @@ function RunSteamCMD { #[Input: int server=0 mod=1 optional_mod=2; int id]
             else # Unknown caught error
                 echo -e "\n${RED}[UPDATE]: ${YELLOW}An unknown error has occurred with SteamCMD. ${CYAN}Skipping download...${NC}"
                 echo -e "SteamCMD Errors:\n${loggedErrors}"
+                PrintSteamCMDLog
                 echo -e "\t${YELLOW}(Please contact your administrator/host if this issue persists)${NC}\n"
                 break
             fi
         elif [[ $steamcmdExitCode != 0 ]]; then # Unknown fatal error
             echo -e "\n${RED}[UPDATE]: SteamCMD has crashed for an unknown reason!${NC} (Exit code: ${CYAN}${steamcmdExitCode}${NC})"
+            PrintSteamCMDLog
             echo -e "\t${YELLOW}(Please contact your administrator/host for support)${NC}\n"
             cp -r /tmp/dumps /home/container/dumps
             exit $steamcmdExitCode
@@ -111,6 +133,12 @@ function RunSteamCMD { #[Input: int server=0 mod=1 optional_mod=2; int id]
             if [[ $1 == 0 ]]; then # Server
                 echo -e "\n${GREEN}[UPDATE]: Game server is up to date!${NC}"
             else # Mod
+                if [[ ${steamcmdOutputHidden} == 1 ]]; then # Summarize the hidden SteamCMD output in a single line
+                    modSize=$(grep -o "([0-9]* bytes)" "${STEAMCMD_LOG}" | tail -1 | grep -o "[0-9]*")
+                    if [[ -n ${modSize} ]]; then
+                        echo -e "\tDownloaded ${CYAN}$(numfmt --to=iec-i --suffix=B ${modSize} 2> /dev/null || echo ${modSize} bytes)${NC} from the Steam Workshop."
+                    fi
+                fi
                 # Move the downloaded mod to the root directory, and replace existing mod if needed
                 mkdir -p ./@$2
                 rm -rf ./@$2/*
@@ -324,6 +352,10 @@ if [[ ${UPDATE_SERVER} == 1 ]]; then
     ## Update mods
     if [[ -n $allMods ]] && [[ ${DISABLE_MOD_UPDATES} != 1 ]]; then
         echo -e "\n${GREEN}[UPDATE]:${NC} Checking all ${CYAN}Steam Workshop mods${NC} for updates..."
+        if [[ ${STEAMCMD_VERBOSE} != "1" ]]; then
+            echo -e "\t(SteamCMD's output is hidden for mod downloads. It is printed automatically on errors,"
+            echo -e "\t and can be shown for every mod with the \"${CYAN}Verbose SteamCMD Mod Output${NC}\" startup variable)"
+        fi
         for modID in $(echo $allMods | sed -e 's/@//g')
         do
             if [[ $modID =~ ^[0-9]+$ ]]; then # Only check mods that are in ID-form
