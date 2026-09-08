@@ -425,9 +425,12 @@ if [[ ${UPDATE_SERVER} == 1 ]]; then
                     modDir=@${modID}
                 fi
 
-                # Get the mod's latest update in epoch time, and fall back to its Steam Workshop changelog page
+                # Get the mod's latest update in epoch time. Whatever the API did not answer for -
+                # unlisted mods are reported as missing by it, for example - is looked up on the
+                # mod's Workshop changelog page instead. That only ever affects a few mods, so Steam
+                # does not rate limit those requests.
                 latestUpdate=${modUpdateTimes[$modID]}
-                if [[ -z ${latestUpdate} ]] && [[ -z ${modUnavailable[$modID]} ]]; then
+                if [[ ! ${latestUpdate} =~ ^[0-9]+$ ]]; then
                     latestUpdate=$(curl -sL https://steamcommunity.com/sharedfiles/filedetails/changelog/$modID | grep '<p id=' | head -1 | cut -d'"' -f2)
                 fi
 
@@ -468,13 +471,12 @@ if [[ ${UPDATE_SERVER} == 1 ]]; then
 
                     echo -e "\tAttempting mod update/download via SteamCMD...\n"
                     RunSteamCMD $modType $modID
-                elif [[ ! ${latestUpdate} =~ ^[0-9]+$ ]]; then # The mod cannot be checked for updates at all
+                elif [[ ! ${latestUpdate} =~ ^[0-9]+$ ]]; then # Neither the API nor the Workshop page knows this mod
+                    echo -e "\n${YELLOW}[UPDATE]:${NC} Could not determine the last update time of mod ${CYAN}${modID}${NC}. ${CYAN}Skipping...${NC}"
                     if [[ -n ${modUnavailable[$modID]} ]]; then
-                        echo -e "\n${YELLOW}[UPDATE]:${NC} Mod ${CYAN}${modID}${NC} is no longer available on the Steam Workshop. (API result: ${CYAN}${modUnavailable[$modID]}${NC})"
-                        echo -e "\t(It was removed or made private. Any local copy is kept and still loaded)"
-                    else
-                        echo -e "\n${YELLOW}[UPDATE]:${NC} Could not determine the last update time of mod ${CYAN}${modID}${NC}. ${CYAN}Skipping...${NC}"
+                        echo -e "\t(The Steam API returned result ${CYAN}${modUnavailable[$modID]}${NC} for it, so it may have been removed or made private)"
                     fi
+                    echo -e "\t(Any local copy of the mod is kept and still loaded)"
                 fi
             fi
         done
