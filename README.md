@@ -60,6 +60,17 @@ on top of the ones from the JSON list, so both sources can be combined.
   failed download can never wipe the installed mods.
 * **Mod names** come from the JSON, so the update log shows readable names without an extra request
   to the Steam Workshop page.
+* **Update detection** asks the Steam Web API
+  (`ISteamRemoteStorage/GetPublishedFileDetails`) for the `time_updated` of every mod in **one**
+  request. The original egg scraped one Workshop changelog page per mod, and Steam rate limits that
+  after a handful of requests — with a 45 mod list, 44 of the 45 pages came back without a
+  timestamp, and every one of those mods was silently treated as up to date. The Workshop page is
+  still used as a per-mod fallback if the API cannot be reached.
+* **The update time a mod was downloaded for** is stored in `@<id>/.workshop_update_time` and
+  compared numerically, instead of guessing from the directory's modification time. Mods installed
+  before this existed fall back to that timestamp, so nothing has to be re-downloaded once.
+* **Mods that Steam no longer serves** (deleted or set to private) are reported by ID instead of
+  being skipped without a word. The local copy is kept and still loaded.
 * **Quiet mod downloads:** SteamCMD repeats its entire login banner for every mod, which buries the
   update log when dozens of mods are being updated. Its output is therefore written to
   `steamcmd/steamcmd.log` only, and each mod is summarised in a few lines. On an error — and on

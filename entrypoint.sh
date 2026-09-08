@@ -15,6 +15,8 @@ STEAMCMD_LOG="${STEAMCMD_DIR}/steamcmd.log"     # Log file for SteamCMD
 GAME_ID=107410                                  # SteamCMD ID for the Arma 3 GAME (not server). Only used for Workshop mod downloads.
 EGG_URL='https://pterodactyleggs.com/egg/6735ff3e4924a4e9bbcb79b0'   # URL for Pterodactyl Egg & Info (only used as info to legacy users)
 MOD_JSON_DEFAULT_FILE="workshop.json"           # Default local file name (cache/fallback) for the Workshop mod list JSON
+STEAM_API_URL='https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/'   # Steam Web API used to check mods for updates
+UPDATE_STAMP_FILE=".workshop_update_time"       # File inside a mod's directory that stores the Workshop update time it was downloaded for
 
 # Color Codes
 CYAN='\033[0;36m'
@@ -27,7 +29,8 @@ NC='\033[0m' # No Color
 # STARTUP, STARTUP_PARAMS, STEAM_USER, STEAM_PASS, SERVER_BINARY, MOD_JSON_URL, MOD_JSON_FILE, MOD_JSON_PRUNE, MOD_FILE, MODIFICATIONS, SERVERMODS, OPTIONALMODS, UPDATE_SERVER, CLEAR_CACHE, VALIDATE_SERVER, MODS_LOWERCASE, STEAMCMD_EXTRA_FLAGS, CDLC, STEAMCMD_APPID, HC_NUM, SERVER_PASSWORD, HC_HIDE, STEAMCMD_ATTEMPTS, BASIC_URL, DISABLE_MOD_UPDATES, STEAMCMD_VERBOSE
 
 ## === GLOBAL VARS ===
-# validateServer, extraFlags, updateAttempt, modifiedStartup, allMods, CLIENT_MODS, jsonMods, modNames, steamcmdArgs, steamcmdOutputHidden
+# validateServer, extraFlags, updateAttempt, modifiedStartup, allMods, CLIENT_MODS, jsonMods, modNames,
+# modUpdateTimes, modUnavailable, latestUpdate, localUpdate, steamcmdArgs, steamcmdOutputHidden
 
 ## === DEFINE FUNCTIONS ===
 #
@@ -165,6 +168,14 @@ function RunSteamCMD { #[Input: int server=0 mod=1 optional_mod=2; int id]
                     # Recreate a directory so time-based detection of auto updates works correctly
                     mkdir ./@$2_optional
                 fi
+                # Remember which Workshop update this download corresponds to, so the next update is detected exactly
+                if [[ ${latestUpdate} =~ ^[0-9]+$ ]]; then
+                    if [[ $1 == 1 ]]; then
+                        echo "${latestUpdate}" > ./@$2/${UPDATE_STAMP_FILE}
+                    else
+                        echo "${latestUpdate}" > ./@$2_optional/${UPDATE_STAMP_FILE}
+                    fi
+                fi
                 echo -e "${GREEN}[UPDATE]: Mod download/update successful!${NC}"
             fi
             break
@@ -219,6 +230,39 @@ function IsValidWorkshopJson { #[Input: str file - Output: exit code]
     [[ -s $1 ]] && [[ -n $(ParseWorkshopJson "$1" | head -1) ]]
 }
 
+# Looks up the last update time (and title) of every given mod ID with a single Steam API request,
+# and stores them in modUpdateTimes/modNames. Mods that Steam no longer serves land in modUnavailable.
+# Requesting the Workshop pages one by one instead gets rate limited by Steam after a handful of
+# mods, which silently hides mod updates for the rest of the mod list.
+function FetchWorkshopUpdateTimes { #[Input: str space delimited mod IDs]
+    local modIDs=($1)
+    local postData="itemcount=${#modIDs[@]}"
+    local index=0
+    local apiResponse apiID apiResult apiTime apiTitle
+
+    if [[ ${#modIDs[@]} == 0 ]] || ! command -v jq &> /dev/null; then
+        return
+    fi
+
+    for apiID in "${modIDs[@]}"; do
+        postData+="&publishedfileids[${index}]=${apiID}"
+        index=$((index+1))
+    done
+
+    apiResponse=$(curl -s --connect-timeout 15 --max-time 60 -X POST -d "${postData}" "${STEAM_API_URL}")
+    while IFS=$'\t' read -r apiID apiResult apiTime apiTitle; do
+        [[ $apiID =~ ^[0-9]+$ ]] || continue
+        if [[ $apiResult == 1 ]] && [[ $apiTime =~ ^[0-9]+$ ]] && (( apiTime > 0 )); then
+            modUpdateTimes[$apiID]=${apiTime}
+            if [[ -z ${modNames[$apiID]} ]] && [[ -n $apiTitle ]]; then
+                modNames[$apiID]="${apiTitle}"
+            fi
+        else
+            modUnavailable[$apiID]=${apiResult}
+        fi
+    done < <(echo "${apiResponse}" | jq -r '.response.publishedfiledetails[]? | "\(.publishedfileid)\t\(.result // 0)\t\(.time_updated // 0)\t\(.title // "")"' 2> /dev/null)
+}
+
 # Removes duplicate items from a semicolon delimited string
 function RemoveDuplicates { #[Input: str - Output: printf of new str]
     if [[ -n $1 ]]; then # If nothing to compare, skip to prevent extra semicolon being returned
@@ -256,6 +300,8 @@ fi
 # Download the Steam Workshop mod list JSON (Strike Launcher format), and add its mods to the client-side mods list
 MOD_JSON_FILE=${MOD_JSON_FILE:-$MOD_JSON_DEFAULT_FILE}
 declare -A modNames
+declare -A modUpdateTimes
+declare -A modUnavailable
 jsonModCount=0
 if [[ -n ${MOD_JSON_URL} ]]; then
     echo -e "\n${GREEN}[STARTUP]: ${NC}Fetching the Steam Workshop mod list from: ${CYAN}${MOD_JSON_URL}${NC}"
@@ -356,6 +402,15 @@ if [[ ${UPDATE_SERVER} == 1 ]]; then
             echo -e "\t(SteamCMD's output is hidden for mod downloads. It is printed automatically on errors,"
             echo -e "\t and can be shown for every mod with the \"${CYAN}Verbose SteamCMD Mod Output${NC}\" startup variable)"
         fi
+        # Look up every mod's last update time in one request, instead of scraping one page per mod
+        FetchWorkshopUpdateTimes "$(echo ${allMods} | sed -e 's/@//g' | tr ' ' '\n' | grep -E '^[0-9]+$' | tr '\n' ' ')"
+        if [[ ${#modUpdateTimes[@]} -gt 0 ]]; then
+            echo -e "\t${GREEN}${#modUpdateTimes[@]} mod(s)${NC} checked against the Steam Workshop API."
+        else
+            echo -e "\t${YELLOW}The Steam Workshop API could not be reached - falling back to the Workshop pages.${NC}"
+            echo -e "\t(Steam rate limits those, so mod updates may go unnoticed)"
+        fi
+
         for modID in $(echo $allMods | sed -e 's/@//g')
         do
             if [[ $modID =~ ^[0-9]+$ ]]; then # Only check mods that are in ID-form
@@ -370,11 +425,26 @@ if [[ ${UPDATE_SERVER} == 1 ]]; then
                     modDir=@${modID}
                 fi
 
-                # Get mod's latest update in epoch time from its Steam Workshop changelog page
-                latestUpdate=$(curl -sL https://steamcommunity.com/sharedfiles/filedetails/changelog/$modID | grep '<p id=' | head -1 | cut -d'"' -f2)
+                # Get the mod's latest update in epoch time, and fall back to its Steam Workshop changelog page
+                latestUpdate=${modUpdateTimes[$modID]}
+                if [[ -z ${latestUpdate} ]] && [[ -z ${modUnavailable[$modID]} ]]; then
+                    latestUpdate=$(curl -sL https://steamcommunity.com/sharedfiles/filedetails/changelog/$modID | grep '<p id=' | head -1 | cut -d'"' -f2)
+                fi
 
-                # If the update time is valid and newer than the local directory's creation date, or the mod hasn't been downloaded yet, download the mod
-                if [[ ! -d $modDir ]] || [[ ( -n $latestUpdate ) && ( $latestUpdate =~ ^[0-9]+$ ) && ( $latestUpdate > $(find $modDir | head -1 | xargs stat -c%Y) ) ]]; then
+                # Get the Workshop update time the local copy was downloaded for
+                localUpdate=0
+                if [[ -d ${modDir} ]]; then
+                    localUpdate=$(cat "${modDir}/${UPDATE_STAMP_FILE}" 2> /dev/null)
+                    if [[ ! ${localUpdate} =~ ^[0-9]+$ ]]; then # Mods that were downloaded before update times were tracked
+                        localUpdate=$(find ${modDir} | head -1 | xargs stat -c%Y)
+                    fi
+                    if [[ ! ${localUpdate} =~ ^[0-9]+$ ]]; then
+                        localUpdate=0
+                    fi
+                fi
+
+                # If the update time is valid and newer than the local copy's, or the mod hasn't been downloaded yet, download the mod
+                if [[ ! -d $modDir ]] || [[ ( ${latestUpdate} =~ ^[0-9]+$ ) && ( ${latestUpdate} -gt ${localUpdate} ) ]]; then
                     # Get the mod's name from the Workshop page as well
                     modName=${modNames[$modID]}
                     if [[ -z $modName ]]; then # Fall back to the Workshop page if the mod is not named in the mod list JSON
@@ -398,6 +468,13 @@ if [[ ${UPDATE_SERVER} == 1 ]]; then
 
                     echo -e "\tAttempting mod update/download via SteamCMD...\n"
                     RunSteamCMD $modType $modID
+                elif [[ ! ${latestUpdate} =~ ^[0-9]+$ ]]; then # The mod cannot be checked for updates at all
+                    if [[ -n ${modUnavailable[$modID]} ]]; then
+                        echo -e "\n${YELLOW}[UPDATE]:${NC} Mod ${CYAN}${modID}${NC} is no longer available on the Steam Workshop. (API result: ${CYAN}${modUnavailable[$modID]}${NC})"
+                        echo -e "\t(It was removed or made private. Any local copy is kept and still loaded)"
+                    else
+                        echo -e "\n${YELLOW}[UPDATE]:${NC} Could not determine the last update time of mod ${CYAN}${modID}${NC}. ${CYAN}Skipping...${NC}"
+                    fi
                 fi
             fi
         done
