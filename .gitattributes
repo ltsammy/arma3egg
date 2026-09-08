@@ -1,0 +1,5 @@
+# Keep everything LF, so the shell scripts work inside the Linux container
+* text=auto eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+passwd.template text eol=lf
