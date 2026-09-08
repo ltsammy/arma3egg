@@ -18,7 +18,7 @@ restarting the server is enough — nothing has to be uploaded to the server any
 | --- | --- |
 | [egg-arma3-aoc.json](egg-arma3-aoc.json) | The egg — import it in the Pterodactyl/Pelican panel under *Nests → Import Egg* |
 | [entrypoint.sh](entrypoint.sh) | Container start script (mod list download, mod updates, server start) |
-| [Dockerfile](Dockerfile) | Docker image (identical to upstream, plus `jq`) |
+| [Dockerfile](Dockerfile) | Docker image (Debian bookworm, upstream package set plus `jq`) |
 | [passwd.template](passwd.template) | NSS wrapper template (unchanged, required by Arma) |
 
 ## Expected JSON format
@@ -64,12 +64,18 @@ on top of the ones from the JSON list, so both sources can be combined.
 
 The image is the upstream one plus `jq`. Both variants are pre-configured in the egg:
 
-* `ghcr.io/ltsammy/arma3-aoc:latest` — the image of this repository (default in the egg). It is built and pushed
-  automatically by [.github/workflows/build-image.yml](.github/workflows/build-image.yml) on every
-  push to `main` that touches the `Dockerfile`, the `entrypoint.sh` or `passwd.template`.
+* `ghcr.io/ltsammy/arma3-aoc:latest` — the image of this repository, public and the default in the
+  egg. It is built and pushed automatically by
+  [.github/workflows/build-image.yml](.github/workflows/build-image.yml) on every push to `main`
+  that touches the `Dockerfile`, the `entrypoint.sh` or `passwd.template`.
 * `ghcr.io/ptero-eggs/games:arma3` — upstream image as a fallback. Works too: without `jq` the
   entrypoint falls back to a built-in parser that reads the mod IDs (only the mod names are missing
   from the log).
+
+The base is Debian **bookworm** with the package set of the maintained
+[parkervcp/yolks](https://github.com/parkervcp/yolks/tree/master/games/arma3) image, because Debian
+bullseye — which the older Ptero-Eggs image is based on — has reached end of life and its security
+suite no longer serves packages.
 
 Building locally:
 
